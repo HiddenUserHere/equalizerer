@@ -230,8 +230,33 @@ Linux. MVP window, top to bottom:
    Save as, Rename, Delete), 10 vertical sliders with value labels, filled response curve,
    frequency labels, dB grid. Double-click resets a slider to 0; mouse wheel = 0.5 dB.
 3. **Audio processing card:** latency slider with three detents and the measured latency in ms.
+4. **Start with Windows** checkbox below that card (Windows only; hidden elsewhere). Checking it
+   writes the value `Equalizerer` under `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`
+   with the data `"<exe path>" --minimized`; unchecking deletes it. The state is read from that
+   value at start. Demo mode shows the checkbox but writes nothing.
 
 Redraws only on change; the latency label refreshes from `Stats` ~4×/s.
+
+**Window and tray (Windows).** The window stays resizable but has no maximize button: the
+maximize box is removed, so it cannot be used, and Windows still draws it greyed out because the
+window can be resized. The minimize and close buttons remain.
+
+- **Minimize** hides the window to the tray: it leaves the taskbar and audio keeps running. The
+  window's native settings are applied with Slint's winit accessor (`unstable-winit-030`); Slint
+  re-enables the maximize box when it creates the window, so the event filter removes it once the
+  window exists.
+- **Close (X)** quits the app, the same as the tray's "Quit": the controller powers off and
+  restores the default device.
+- **Tray icon** (`src/tray.rs`, `tray-icon` crate): a 32 × 32 icon generated in code
+  (`src/icon.rs`, accent square with four EQ bars), tooltip "Equalizerer". Double-click or a left
+  click opens the window; the right-click menu has "Open Equalizerer" and "Quit".
+- **Showing again:** the tray opens the window, and a second launch of the exe asks the running
+  instance to show its window. Both un-minimize and bring the window to the front.
+- **`--minimized`** starts with the window hidden, so only the tray icon is visible. The autostart
+  entry passes it. Without a tray icon the window is shown at start and minimizes normally.
+- The event loop runs until a quit, so hiding the window does not end the program.
+
+Linux has no tray and no autostart yet (backlog): the window behaves as an ordinary window there.
 
 Single instance: named mutex on Windows, lock file + Unix socket in `$XDG_RUNTIME_DIR` on Linux;
 a second launch asks the first to show its window and exits.

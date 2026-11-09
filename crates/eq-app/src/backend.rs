@@ -58,3 +58,70 @@ pub fn restore_default(target: &DeviceId) -> Result<(), String> {
 pub fn restore_default(_target: &DeviceId) -> Result<(), String> {
     Err("restoring the default output is not supported on this platform yet".to_owned())
 }
+
+/// Name of the value in the per-user `Run` key. Windows shows it in the startup settings.
+#[cfg(windows)]
+const AUTOSTART_VALUE: &str = "Equalizerer";
+
+/// Whether "Start with Windows" can be offered on this platform.
+#[cfg(windows)]
+#[must_use]
+pub fn autostart_available() -> bool {
+    true
+}
+
+/// Whether "Start with Windows" can be offered on this platform. It cannot yet elsewhere.
+#[cfg(not(windows))]
+#[must_use]
+pub fn autostart_available() -> bool {
+    false
+}
+
+/// Tells whether the app starts with Windows.
+///
+/// # Errors
+///
+/// Returns the failure as text, because the caller only shows it.
+#[cfg(windows)]
+pub fn autostart_is_enabled() -> Result<bool, String> {
+    eq_wasapi::is_autostart_enabled(AUTOSTART_VALUE).map_err(|error| error.to_string())
+}
+
+/// Tells whether the app starts with Windows. Always `false` where the setting does not exist.
+///
+/// # Errors
+///
+/// Never fails on this platform; the signature matches the Windows version.
+#[cfg(not(windows))]
+pub fn autostart_is_enabled() -> Result<bool, String> {
+    Ok(false)
+}
+
+/// Starts the app with Windows (`enabled`) or stops that. Starting runs this executable with
+/// `--minimized`, so the first start shows only the tray icon.
+///
+/// # Errors
+///
+/// Returns the failure as text, because the caller only shows it.
+#[cfg(windows)]
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    if enabled {
+        let program = std::env::current_exe()
+            .map_err(|error| format!("cannot find the program file: {error}"))?;
+        // The path is quoted because it may contain spaces; the shell splits the command line.
+        let command = format!("\"{}\" --minimized", program.display());
+        eq_wasapi::enable_autostart(AUTOSTART_VALUE, &command).map_err(|error| error.to_string())
+    } else {
+        eq_wasapi::disable_autostart(AUTOSTART_VALUE).map_err(|error| error.to_string())
+    }
+}
+
+/// Starts the app with the OS or stops that. No setting exists on this platform yet.
+///
+/// # Errors
+///
+/// Always returns an error until the platform has the setting.
+#[cfg(not(windows))]
+pub fn set_autostart(_enabled: bool) -> Result<(), String> {
+    Err("starting with the system is not supported on this platform yet".to_owned())
+}

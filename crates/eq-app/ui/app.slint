@@ -3,13 +3,14 @@ import { PowerButton } from "power_button.slint";
 import { EqCard } from "eq.slint";
 import { PresetRowItem, PresetDialogKind, PresetNameDialog, PresetConfirmDialog } from "presets.slint";
 import { LatencySlider } from "latency.slint";
+import { CheckBox } from "checkbox.slint";
 
 export component AppWindow inherits Window {
     title: "Equalizerer";
     preferred-width: 900px;
-    preferred-height: 560px;
+    preferred-height: 620px;
     min-width: 760px;
-    min-height: 520px;
+    min-height: 600px;
     background: Theme.background;
     default-font-family: Theme.font-family;
 
@@ -60,6 +61,11 @@ export component AppWindow inherits Window {
 
     callback power-toggled(bool);
     callback gain-changed(int, float);
+
+    // "Start with Windows". Hidden where the platform has no such setting.
+    in property <bool> autostart-available: false;
+    in property <bool> autostart-on: false;
+    callback autostart-toggled(bool);
 
     Rectangle {
         VerticalLayout {
@@ -198,6 +204,20 @@ export component AppWindow inherits Window {
                         color: Theme.warning;
                         font-size: Theme.font-small;
                     }
+                }
+            }
+
+            if root.autostart-available : HorizontalLayout {
+                CheckBox {
+                    text: "Start with Windows";
+                    checked: root.autostart-on;
+                    toggled(on) => {
+                        root.autostart-toggled(on);
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
                 }
             }
         }

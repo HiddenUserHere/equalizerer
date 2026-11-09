@@ -12,6 +12,7 @@
 
 #![cfg(windows)]
 
+pub mod autostart;
 pub mod backend;
 pub mod com;
 pub mod devices;
@@ -24,6 +25,9 @@ pub mod policy_config;
 pub mod restore;
 pub mod virtual_device;
 
+pub use autostart::{
+    disable as disable_autostart, enable as enable_autostart, is_enabled as is_autostart_enabled,
+};
 pub use backend::WasapiBackend;
 pub use com::ComApartment;
 pub use devices::MmDirectory;

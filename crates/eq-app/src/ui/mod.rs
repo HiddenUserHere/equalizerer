@@ -8,18 +8,24 @@ pub mod eq_view;
 pub mod latency_view;
 pub mod presets_view;
 pub mod view_model;
+mod window;
 
 use std::cell::RefCell;
 use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use eq_core::{
     AppCommand, AppEvent, AppSnapshot, LatencyMode, PresetSummary, RoutingStatus, Stats,
 };
 use eq_dsp::Layout;
 use latency_view::UnderrunMonitor;
 use presets_view::{DialogKind, PresetRow};
-use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{
+    CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel,
+};
+
+use crate::backend;
+use crate::tray::{self, TrayAction};
 
 /// Generated Slint code. Lints are not applied to it: its style is decided by `slint-build`.
 #[allow(
@@ -81,14 +87,32 @@ struct UiState {
     underruns: UnderrunMonitor,
     /// The dialog that is open, if any.
     dialog: Option<DialogKind>,
+    /// Whether the controller has been sent `AppCommand::Quit`. The window can ask for a quit from
+    /// the close button and from the tray menu, but the controller must get it only once.
+    quit_sent: bool,
 }
 
-/// Creates the main window and runs it until the user closes it.
+/// How the window starts and what the "Start with Windows" checkbox may change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiOptions {
+    /// Start with the window hidden. This needs a tray icon to bring the window back; without
+    /// one the window is shown anyway.
+    pub start_minimized: bool,
+    /// Whether the checkbox writes the autostart setting. Demo mode shows the checkbox but must
+    /// not change the user's startup settings.
+    pub persist_autostart: bool,
+}
+
+/// Creates the main window and runs it until the user quits.
 ///
 /// UI actions are sent to `commands`. Events from the controller are read from `events` on a
 /// forwarder thread and applied on the UI thread. Each message on `show_requests` (a second app
-/// instance asked for the window) shows and raises the window. When the window closes,
-/// [`AppCommand::Quit`] is sent and the function returns.
+/// instance asked for the window) shows the window. Where the platform has a tray icon, it offers
+/// "Open Equalizerer" and "Quit". Minimizing the window hides it to the tray; closing it quits,
+/// like the tray's "Quit".
+///
+/// The event loop keeps running while the window is hidden, so the function returns only through
+/// a quit. A quit sends [`AppCommand::Quit`] once and stops the loop.
 ///
 /// # Errors
 ///
@@ -104,7 +128,9 @@ pub fn run_ui(
     commands: Sender<AppCommand>,
     events: Receiver<AppEvent>,
     show_requests: Receiver<()>,
+    options: UiOptions,
 ) -> Result<(), slint::PlatformError> {
+    window::select_backend()?;
     let window = AppWindow::new()?;
     window.set_band_positions(model(eq_view::band_positions(Layout::Ten)));
     window.set_latency_labels(model(
@@ -113,6 +139,14 @@ pub fn run_ui(
             .map(|mode| SharedString::from(mode.label()))
             .collect(),
     ));
+    window.set_autostart_available(backend::autostart_available());
+    window.set_autostart_on(match backend::autostart_is_enabled() {
+        Ok(enabled) => enabled,
+        Err(error) => {
+            tracing::warn!("cannot read the Start with Windows setting: {error}");
+            false
+        }
+    });
 
     let power_commands = commands.clone();
     window.on_power_toggled(move |on| send(&power_commands, AppCommand::SetPower(on)));
@@ -176,6 +210,22 @@ pub fn run_ui(
         }
     });
 
+    let autostart_persist = options.persist_autostart;
+    let weak = window.as_weak();
+    window.on_autostart_toggled(move |enabled| {
+        if let Some(ui) = weak.upgrade() {
+            apply_autostart(&ui, enabled, autostart_persist);
+        }
+    });
+
+    // The close button quits, like the tray's "Quit". The window itself is hidden as the event
+    // loop ends.
+    let close_commands = commands.clone();
+    window.window().on_close_requested(move || {
+        request_quit(&close_commands);
+        CloseRequestResponse::HideWindow
+    });
+
     let weak = window.as_weak();
     window.on_curve_resized(move |width, height| {
         // Sizes of 1 px or less come from layout passes before the plot has its size; NaN fails
@@ -212,10 +262,38 @@ pub fn run_ui(
         .spawn(move || forward_show_requests(&show_requests, &weak))
         .map_err(|error| slint::PlatformError::Other(error.to_string()))?;
 
-    window.run()?;
+    // A failed tray leaves no way to bring a hidden window back, so the window then keeps the
+    // default behaviour: it is shown at start and minimizes normally.
+    let (tray_tx, tray_rx) = unbounded::<TrayAction>();
+    let tray = match tray::start(tray_tx) {
+        Ok(tray) => tray,
+        Err(message) => {
+            tracing::warn!("{message}");
+            None
+        }
+    };
+    window::install_window_filter(&window, tray.is_some());
+    let weak = window.as_weak();
+    let tray_commands = commands.clone();
+    std::thread::Builder::new()
+        .name("ui-tray".to_owned())
+        .spawn(move || forward_tray_actions(&tray_rx, &weak, &tray_commands))
+        .map_err(|error| slint::PlatformError::Other(error.to_string()))?;
 
-    // Closing the window ends the session: the controller powers off and exits.
-    send(&commands, AppCommand::Quit);
+    let start_hidden = options.start_minimized && tray.is_some();
+    if options.start_minimized && !start_hidden {
+        tracing::info!("no tray icon is available; the window is shown at start");
+    }
+    if !start_hidden {
+        window::show(&window);
+    }
+
+    // The loop keeps running while the window is hidden. It ends through `request_quit`.
+    slint::run_event_loop_until_quit()?;
+
+    // The tray icon disappears as soon as the loop has ended, not when the process exits.
+    drop(tray);
+    send_quit_once(&commands);
     Ok(())
 }
 
@@ -241,13 +319,13 @@ fn forward_events(events: &Receiver<AppEvent>, window: &slint::Weak<AppWindow>) 
     }
 }
 
-/// Raises the window for each show request until either side goes away.
+/// Shows the window for each show request until either side goes away.
 fn forward_show_requests(requests: &Receiver<()>, window: &slint::Weak<AppWindow>) {
     while requests.recv().is_ok() {
         let window = window.clone();
         let posted = slint::invoke_from_event_loop(move || {
             if let Some(ui) = window.upgrade() {
-                raise_window(&ui);
+                window::show(&ui);
             }
         });
         if posted.is_err() {
@@ -257,14 +335,65 @@ fn forward_show_requests(requests: &Receiver<()>, window: &slint::Weak<AppWindow
     }
 }
 
-/// Shows the window and restores it from the minimized state. Runs on the UI thread.
-///
-/// Slint has no call to request focus, so the window is shown and un-minimized; whether it also
-/// comes to the foreground depends on the platform's focus rules.
-fn raise_window(ui: &AppWindow) {
-    ui.window().set_minimized(false);
-    if let Err(error) = ui.show() {
-        tracing::warn!("cannot show the window: {error}");
+/// Applies tray requests on the UI thread until either side goes away. Open shows the window;
+/// Quit runs the same shutdown as the close button.
+fn forward_tray_actions(
+    actions: &Receiver<TrayAction>,
+    window: &slint::Weak<AppWindow>,
+    commands: &Sender<AppCommand>,
+) {
+    while let Ok(action) = actions.recv() {
+        let window = window.clone();
+        let commands = commands.clone();
+        let posted = slint::invoke_from_event_loop(move || match action {
+            TrayAction::Open => {
+                if let Some(ui) = window.upgrade() {
+                    window::show(&ui);
+                }
+            }
+            TrayAction::Quit => request_quit(&commands),
+        });
+        if posted.is_err() {
+            // The event loop has ended, so the window is gone.
+            break;
+        }
+    }
+}
+
+/// Sends `AppCommand::Quit` unless that was done already. Runs on the UI thread.
+fn send_quit_once(commands: &Sender<AppCommand>) {
+    let first = UI_STATE.with(|cell| !std::mem::replace(&mut cell.borrow_mut().quit_sent, true));
+    if first {
+        send(commands, AppCommand::Quit);
+    }
+}
+
+/// Starts the shutdown: sends the quit once and stops the event loop, so `run_ui` returns.
+/// Runs on the UI thread.
+fn request_quit(commands: &Sender<AppCommand>) {
+    send_quit_once(commands);
+    if let Err(error) = slint::quit_event_loop() {
+        tracing::warn!("cannot stop the event loop: {error}");
+    }
+}
+
+/// Writes the "Start with Windows" setting and shows the outcome. When the write fails, the
+/// checkbox goes back to its previous state. Runs on the UI thread.
+fn apply_autostart(ui: &AppWindow, enabled: bool, persist: bool) {
+    let result = if persist {
+        backend::set_autostart(enabled)
+    } else {
+        Ok(())
+    };
+    match result {
+        Ok(()) => ui.set_autostart_on(enabled),
+        Err(message) => {
+            show_error(
+                ui,
+                &format!("Start with Windows could not be changed: {message}"),
+            );
+            ui.set_autostart_on(!enabled);
+        }
     }
 }
 

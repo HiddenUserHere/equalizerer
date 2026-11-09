@@ -329,6 +329,15 @@ P1, P3, P4.1–4.4 and P5.1–5.3 touch different crates and can run in parallel
   scaling), icons: Windows `.ico` + version resource (`embed-resource`), Linux `.desktop` file +
   PNG/SVG icons under `packaging/linux/`.
 
+**[x] T-6.7 Tray, minimize to tray, start with Windows** — `src/tray.rs`, `src/icon.rs`,
+`src/ui/window.rs`, `eq-wasapi/src/autostart.rs`
+- Tray icon with "Open Equalizerer" and "Quit" (double-click or left click opens). Minimize hides
+  the window to the tray; close quits; `--minimized` starts hidden. No maximize button. "Start with
+  Windows" checkbox below the audio card writes the HKCU Run value with `--minimized`.
+- Acceptance (Windows): tray opens and quits the app; minimize removes the window from the
+  taskbar; a second launch shows the hidden window; the checkbox toggles the Run value. Linux: no
+  tray, the window keeps the ordinary behaviour.
+
 ## Phase 7 — QA
 
 **[ ] T-7.1 Scenario checklist** — `docs/testing.md`, run on Windows and on a Linux desktop:
@@ -348,7 +357,7 @@ PipeWire with `systemctl --user restart pipewire` → app recovers or shows the 
 | 31-band layout | `Layout::ThirtyOne` (ISO third-octave, Q ≈ 4.318) + 10/31 toggle |
 | Pre-amp + auto pre-amp, clip LED, output meter | |
 | Output device list in the app | Select target from the UI |
-| Tray icon, close-to-tray, start with OS | Windows Run key; Linux XDG autostart `.desktop` |
+| Linux tray icon and XDG autostart | Windows tray and Run key are done (T-6.7); Linux needs a tray (StatusNotifierItem) and an autostart `.desktop` file |
 | AutoEq import / preset export | AutoEq TSV and `GraphicEQ:` text |
 | Windows volume bridge | **Promote to MVP if T-4.5 shows volume keys don't work** |
 | Idle auto-stop | Stop the pipeline when nothing plays; measure first |

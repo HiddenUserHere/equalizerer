@@ -9,9 +9,11 @@
 mod args;
 mod backend;
 mod demo;
+mod icon;
 mod logging;
 mod panic;
 mod single_instance;
+mod tray;
 mod ui;
 
 use std::process::ExitCode;
@@ -22,12 +24,13 @@ use eq_core::{
     SettingsStore,
 };
 
-use args::Mode;
+use args::{Mode, Options};
 use single_instance::Claim;
+use ui::UiOptions;
 
 fn main() -> ExitCode {
-    let mode = match args::parse(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+    let options = match args::parse(std::env::args().skip(1)) {
+        Ok(options) => options,
         Err(message) => {
             eprintln!("{message}");
             return ExitCode::from(2);
@@ -40,11 +43,11 @@ fn main() -> ExitCode {
     };
     // Kept alive until `main` returns, so the log is flushed on every exit path below.
     let _log_guard = logging::init(&paths.log_dir);
-    tracing::info!(?mode, version = env!("CARGO_PKG_VERSION"), "starting");
+    tracing::info!(?options, version = env!("CARGO_PKG_VERSION"), "starting");
 
-    match mode {
+    match options.mode {
         Mode::Restore => restore(&paths),
-        Mode::App | Mode::Demo => run_session(mode, &paths),
+        Mode::App | Mode::Demo => run_session(options, &paths),
     }
 }
 
@@ -69,7 +72,7 @@ fn restore(paths: &AppPaths) -> ExitCode {
 
 /// Runs the window, unless another instance already runs. Then the window is the first
 /// instance's and this process only asks it to show itself.
-fn run_session(mode: Mode, paths: &AppPaths) -> ExitCode {
+fn run_session(options: Options, paths: &AppPaths) -> ExitCode {
     let (show_tx, show_rx) = unbounded::<()>();
     // Held for the whole session; dropping it lets the next launch become the first instance.
     let _held = match single_instance::claim(show_tx) {
@@ -83,19 +86,24 @@ fn run_session(mode: Mode, paths: &AppPaths) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    match mode {
-        Mode::Demo => run_demo(show_rx),
-        Mode::App | Mode::Restore => run_app(paths, show_rx),
+    match options.mode {
+        Mode::Demo => run_demo(show_rx, options.start_minimized),
+        Mode::App | Mode::Restore => run_app(paths, show_rx, options.start_minimized),
     }
 }
 
 /// `--demo`: the window with the stand-in controller, for UI work without audio.
-fn run_demo(show_requests: Receiver<()>) -> ExitCode {
+fn run_demo(show_requests: Receiver<()>, start_minimized: bool) -> ExitCode {
     tracing::info!("running the demo controller (--demo)");
     let (command_tx, command_rx) = unbounded::<AppCommand>();
     let (event_tx, event_rx) = unbounded::<AppEvent>();
     let controller = demo::spawn(command_rx, event_tx);
-    let result = ui::run_ui(command_tx, event_rx, show_requests);
+    // The demo never writes the "Start with Windows" setting: it only shows the checkbox.
+    let ui_options = UiOptions {
+        start_minimized,
+        persist_autostart: false,
+    };
+    let result = ui::run_ui(command_tx, event_rx, show_requests, ui_options);
     // The demo stops when its command channel closes, which the failed or closed UI caused.
     if controller.join().is_err() {
         tracing::error!("the demo controller panicked");
@@ -104,7 +112,7 @@ fn run_demo(show_requests: Receiver<()>) -> ExitCode {
 }
 
 /// Normal mode: the real controller with the platform backend, and the window.
-fn run_app(paths: &AppPaths, show_requests: Receiver<()>) -> ExitCode {
+fn run_app(paths: &AppPaths, show_requests: Receiver<()>, start_minimized: bool) -> ExitCode {
     let settings_store = SettingsStore::new(paths.settings_file.clone());
     let settings = settings_store.load();
     let presets = match PresetStore::open(paths.presets_dir.clone()) {
@@ -146,7 +154,11 @@ fn run_app(paths: &AppPaths, show_requests: Receiver<()>) -> ExitCode {
     // The window sends Quit when it closes. If it fails before that, this copy of the sender
     // still ends the controller; without a Quit the join below would wait forever.
     let quit_tx = command_tx.clone();
-    let result = ui::run_ui(command_tx, event_rx, show_requests);
+    let ui_options = UiOptions {
+        start_minimized,
+        persist_autostart: true,
+    };
+    let result = ui::run_ui(command_tx, event_rx, show_requests, ui_options);
     let _ = quit_tx.send(AppCommand::Quit);
     if controller.join().is_err() {
         tracing::error!("the controller thread panicked");

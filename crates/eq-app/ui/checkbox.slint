@@ -1,0 +1,78 @@
+import { Theme } from "theme.slint";
+
+// Square check box with a label. The owner stores the state in `checked` and reacts to
+// `toggled`, which carries the requested new state. Mouse click, the whole row, and Space (when
+// focused) all toggle it.
+export component CheckBox inherits Rectangle {
+    in property <bool> checked: false;
+    in property <string> text;
+    callback toggled(bool);
+
+    width: 200px;
+    height: 24px;
+
+    // The box: 18 px, rounded, filled with the accent when on.
+    box := Rectangle {
+        x: 0px;
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        border-width: 2px;
+        border-color: fs.has-focus
+            ? Theme.text
+            : (root.checked ? Theme.accent : (touch.has-hover ? Theme.text : Theme.text-muted));
+        background: root.checked
+            ? (touch.has-hover ? #4d8ef7 : Theme.accent)
+            : (touch.has-hover ? #222630 : Theme.background);
+        animate background, border-color { duration: Theme.transition; }
+
+        // Check mark on an 18 x 18 grid; visible only when checked.
+        Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: 18;
+            viewbox-height: 18;
+            commands: "M 4.2 9.3 L 7.5 12.4 L 13.6 5.8";
+            fill: transparent;
+            stroke: Theme.on-accent;
+            stroke-width: 2px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+            opacity: root.checked ? 1 : 0;
+            animate opacity { duration: Theme.transition; }
+        }
+    }
+
+    Text {
+        x: box.width + 10px;
+        width: root.width - self.x;
+        height: root.height;
+        text: root.text;
+        color: Theme.text;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    fs := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == Key.Space) {
+                root.toggled(!root.checked);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => {
+            fs.focus();
+            root.toggled(!root.checked);
+        }
+    }
+}
