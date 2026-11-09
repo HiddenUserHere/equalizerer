@@ -1,0 +1,261 @@
+import { Theme } from "theme.slint";
+import { PowerButton } from "power_button.slint";
+import { EqCard } from "eq.slint";
+import { PresetRowItem, PresetDialogKind, PresetNameDialog, PresetConfirmDialog } from "presets.slint";
+import { LatencySlider } from "latency.slint";
+
+export component AppWindow inherits Window {
+    title: "Equalizerer";
+    preferred-width: 900px;
+    preferred-height: 560px;
+    min-width: 760px;
+    min-height: 520px;
+    background: Theme.background;
+    default-font-family: Theme.font-family;
+
+    in property <bool> power-on: false;
+    in property <string> status-text: "";
+    in property <bool> status-degraded: false;
+    in property <[float]> gains;
+    in property <[string]> gain-labels;
+    in property <[float]> band-positions;
+    in property <string> curve-fill: "";
+    in property <string> curve-line: "";
+    in property <float> curve-viewbox-width: 1000;
+    in property <float> curve-viewbox-height: 180;
+    callback curve-resized(float, float);
+    in property <string> error-text: "";
+    in property <bool> error-visible: false;
+
+    // Presets.
+    in property <[PresetRowItem]> preset-rows;
+    in property <string> preset-label: "Custom";
+    in property <bool> preset-modified: false;
+    in property <bool> can-save: false;
+    in property <bool> can-rename: false;
+    in property <bool> can-delete: false;
+    callback preset-selected(string);
+    callback preset-save();
+    callback preset-save-as();
+    callback preset-rename();
+    callback preset-delete();
+
+    // Dialog shown for "Save as", "Rename" and "Delete". The Rust side owns its state.
+    in property <PresetDialogKind> dialog-kind: PresetDialogKind.none;
+    in property <string> dialog-title;
+    in property <string> dialog-ok-text;
+    in property <bool> dialog-ok-enabled: false;
+    in property <string> dialog-error;
+    in-out property <string> dialog-text;
+    callback dialog-ok(string);
+    callback dialog-cancel();
+    callback dialog-edited(string);
+
+    // Latency.
+    in property <[string]> latency-labels;
+    in property <int> latency-index: 1;
+    in property <string> latency-text: "\u{2014}";
+    in property <bool> dropout-hint: false;
+    callback latency-selected(int);
+
+    callback power-toggled(bool);
+    callback gain-changed(int, float);
+
+    Rectangle {
+        VerticalLayout {
+            padding: Theme.space-l;
+            spacing: Theme.space-m;
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+
+                    Text {
+                        text: "Equalizerer";
+                        color: Theme.text;
+                        font-size: Theme.font-heading;
+                        font-weight: 600;
+                    }
+
+                    Text {
+                        text: root.status-text;
+                        color: root.status-degraded ? Theme.danger : Theme.text-muted;
+                        font-size: Theme.font-body;
+                        overflow: elide;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                PowerButton {
+                    power-on: root.power-on;
+                    clicked => {
+                        root.power-toggled(!root.power-on);
+                    }
+                }
+            }
+
+            EqCard {
+                gains: root.gains;
+                gain-labels: root.gain-labels;
+                band-positions: root.band-positions;
+                curve-fill: root.curve-fill;
+                curve-line: root.curve-line;
+                curve-viewbox-width: root.curve-viewbox-width;
+                curve-viewbox-height: root.curve-viewbox-height;
+                curve-resized(width, height) => {
+                    root.curve-resized(width, height);
+                }
+                power-on: root.power-on;
+                preset-label: root.preset-label;
+                preset-modified: root.preset-modified;
+                preset-rows: root.preset-rows;
+                can-save: root.can-save;
+                can-rename: root.can-rename;
+                can-delete: root.can-delete;
+                gain-changed(band, db) => {
+                    root.gain-changed(band, db);
+                }
+                preset-selected(name) => {
+                    root.preset-selected(name);
+                }
+                preset-save() => {
+                    root.preset-save();
+                }
+                preset-save-as() => {
+                    root.preset-save-as();
+                }
+                preset-rename() => {
+                    root.preset-rename();
+                }
+                preset-delete() => {
+                    root.preset-delete();
+                }
+            }
+
+            Rectangle {
+                background: Theme.card;
+                border-radius: Theme.radius-card;
+                border-width: 1px;
+                border-color: Theme.card-border;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-xs;
+
+                    Text {
+                        text: "Audio processing";
+                        color: Theme.text;
+                        font-size: Theme.font-title;
+                        font-weight: 600;
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+
+                        Text {
+                            text: "Latency";
+                            color: Theme.text;
+                            font-size: Theme.font-body;
+                            width: 64px;
+                            height: 28px;
+                            vertical-alignment: center;
+                        }
+
+                        LatencySlider {
+                            horizontal-stretch: 1;
+                            labels: root.latency-labels;
+                            index: root.latency-index;
+                            selected(index) => {
+                                root.latency-selected(index);
+                            }
+                        }
+
+                        Text {
+                            text: root.latency-text;
+                            color: Theme.text;
+                            font-size: Theme.font-body;
+                            width: 72px;
+                            height: 28px;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: "Lower latency reacts faster; more reliable avoids audio dropouts.";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-small;
+                    }
+
+                    if root.dropout-hint : Text {
+                        text: "Dropouts detected \u{2014} try Automatic.";
+                        color: Theme.warning;
+                        font-size: Theme.font-small;
+                    }
+                }
+            }
+        }
+
+        // Error toast, shown for a few seconds by the Rust side.
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - self.height - Theme.space-m;
+            width: 420px;
+            height: 40px;
+            border-radius: Theme.radius-control;
+            background: Theme.danger;
+            visible: root.error-visible;
+
+            Text {
+                width: parent.width - 2 * Theme.space-m;
+                height: parent.height;
+                x: Theme.space-m;
+                text: root.error-text;
+                color: #ffffff;
+                font-size: Theme.font-body;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        // Modal dialogs: they cover the whole window while open.
+        if root.dialog-kind == PresetDialogKind.name : PresetNameDialog {
+            width: root.width;
+            height: root.height;
+            title: root.dialog-title;
+            ok-text: root.dialog-ok-text;
+            ok-enabled: root.dialog-ok-enabled;
+            error: root.dialog-error;
+            text <=> root.dialog-text;
+            ok(text) => {
+                root.dialog-ok(text);
+            }
+            cancel => {
+                root.dialog-cancel();
+            }
+            edited(text) => {
+                root.dialog-edited(text);
+            }
+        }
+
+        if root.dialog-kind == PresetDialogKind.confirm : PresetConfirmDialog {
+            width: root.width;
+            height: root.height;
+            title: root.dialog-title;
+            ok-text: root.dialog-ok-text;
+            ok => {
+                root.dialog-ok("");
+            }
+            cancel => {
+                root.dialog-cancel();
+            }
+        }
+    }
+}

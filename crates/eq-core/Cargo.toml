@@ -1,0 +1,22 @@
+[package]
+name = "eq-core"
+description = "Domain model, ports, router state machine, presets, settings and controller."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crossbeam-channel = "0.5"
+directories = "5"
+eq-dsp = { path = "../eq-dsp" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

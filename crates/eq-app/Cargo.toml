@@ -1,0 +1,28 @@
+[package]
+name = "eq-app"
+description = "Equalizerer application: composition root, backend selection and the Slint UI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eq-core = { path = "../eq-core" }
+eq-dsp = { path = "../eq-dsp" }
+crossbeam-channel = "0.5"
+slint = "1.18"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+[build-dependencies]
+slint-build = "1.18"
+
+[target.'cfg(windows)'.dependencies]
+eq-wasapi = { path = "../eq-wasapi" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+eq-pipewire = { path = "../eq-pipewire" }
+
+[lints]
+workspace = true

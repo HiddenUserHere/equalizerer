@@ -1,0 +1,133 @@
+import { Theme } from "theme.slint";
+
+// Three-detent latency slider with tick labels under the track.
+//
+// Dragging moves the handle freely and commits the detent nearest to the pointer on release.
+// A click selects the nearest detent at once. Left and Right keys step through the detents.
+// The owner stores the selection in `index`; changing the mode restarts the audio pipeline, so
+// the slider reports a change only when the selected detent differs from `index`.
+export component LatencySlider inherits Rectangle {
+    in property <int> index: 1;
+    in property <[string]> labels;
+    callback selected(int);
+
+    // Half the handle plus a margin, so the handles at the two ends stay inside the widget.
+    private property <length> inset: 9px;
+    private property <length> track-length: root.width - 2 * root.inset;
+    private property <bool> dragging: false;
+    private property <length> drag-x: 0px;
+    private property <length> handle-x: root.dragging
+        ? root.clamp-x(root.drag-x)
+        : root.detent-x(root.index);
+
+    height: 46px;
+
+    function detent-x(i: int) -> length {
+        return root.inset + root.track-length * (i / 2.0);
+    }
+
+    function clamp-x(x: length) -> length {
+        return max(root.inset, min(root.width - root.inset, x));
+    }
+
+    function nearest(x: length) -> int {
+        let t = max(0.0, min(1.0, (x - root.inset) / root.track-length));
+        return round(t * 2.0);
+    }
+
+    // Track and the filled part up to the handle.
+    Rectangle {
+        x: root.inset;
+        y: 10px;
+        width: root.track-length;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.card-border;
+    }
+
+    Rectangle {
+        x: root.inset;
+        y: 10px;
+        width: max(0px, root.handle-x - root.inset);
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+
+    // Tick marks at the three detents.
+    for label[i] in root.labels : Rectangle {
+        x: root.detent-x(i) - 1px;
+        y: 6px;
+        width: 2px;
+        height: 12px;
+        background: i == root.index ? Theme.accent : Theme.text-muted;
+    }
+
+    // Round handle.
+    Rectangle {
+        x: root.handle-x - self.width / 2;
+        y: 12px - self.height / 2;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        border-width: 2px;
+        border-color: fs.has-focus ? Theme.accent : Theme.card-border;
+        background: (touch.pressed || touch.has-hover) ? #ffffff : Theme.text;
+        animate background { duration: 80ms; }
+    }
+
+    // Tick labels: the first is left-aligned, the last right-aligned, the middle one centred.
+    for label[i] in root.labels : Text {
+        x: i == 0 ? 0px : (i == root.labels.length - 1 ? root.width - 120px : root.detent-x(i) - 60px);
+        y: 28px;
+        width: 120px;
+        height: 18px;
+        text: label;
+        color: i == root.index ? Theme.text : Theme.text-muted;
+        font-size: Theme.font-small;
+        horizontal-alignment: i == 0
+            ? TextHorizontalAlignment.left
+            : (i == root.labels.length - 1 ? TextHorizontalAlignment.right : TextHorizontalAlignment.center);
+        vertical-alignment: center;
+    }
+
+    fs := FocusScope {
+        width: parent.width;
+        height: 28px;
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow && root.index > 0) {
+                root.selected(root.index - 1);
+                return accept;
+            }
+            if (event.text == Key.RightArrow && root.index < root.labels.length - 1) {
+                root.selected(root.index + 1);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        width: parent.width;
+        height: 28px;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                fs.focus();
+                root.dragging = true;
+                root.drag-x = self.mouse-x;
+            }
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                root.dragging = false;
+                let target = root.nearest(self.mouse-x);
+                if (target != root.index) {
+                    root.selected(target);
+                }
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.drag-x = self.mouse-x;
+            }
+        }
+    }
+}

@@ -1,0 +1,38 @@
+// Design tokens for the dark theme (see docs/architecture.md section 10).
+
+export global Theme {
+    // Surfaces and text.
+    out property <color> background: #121418;
+    out property <color> card: #1b1e24;
+    out property <color> card-border: #262a31;
+    out property <color> text: #e6e8eb;
+    out property <color> text-muted: #8b919a;
+
+    // Accent and status colours.
+    out property <color> accent: #3b82f6;
+    out property <color> accent-soft: #3b82f640; // rgba(59, 130, 246, 0.25)
+    out property <color> on-accent: #ffffff;
+    out property <color> danger: #ef4444;
+    out property <color> success: #22c55e;
+    out property <color> warning: #f59e0b;
+
+    // Shape.
+    out property <length> radius-card: 12px;
+    out property <length> radius-control: 8px;
+
+    // Spacing scale.
+    out property <length> space-xs: 8px;
+    out property <length> space-s: 12px;
+    out property <length> space-m: 16px;
+    out property <length> space-l: 24px;
+
+    // Type. The family falls back to the platform default where the font is missing.
+    out property <string> font-family: "Segoe UI Variable";
+    out property <length> font-small: 12px;
+    out property <length> font-body: 14px;
+    out property <length> font-title: 16px;
+    out property <length> font-heading: 20px;
+
+    // Standard transition for state changes.
+    out property <duration> transition: 150ms;
+}

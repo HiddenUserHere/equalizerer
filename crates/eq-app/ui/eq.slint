@@ -1,0 +1,318 @@
+import { Theme } from "theme.slint";
+import { PresetBar, PresetRowItem } from "presets.slint";
+
+// One band: a thin track with a fill from 0 dB to the handle and a round handle.
+//   - drag: snaps to 0.1 dB
+//   - mouse wheel and Up/Down keys: 0.5 dB steps
+//   - double-click: back to 0 dB
+// The owner stores the value; the slider only reports the requested value.
+component VerticalSlider inherits Rectangle {
+    in property <float> value: 0;
+    in property <length> track-height: 180px;
+    callback value-edited(float);
+
+    private property <float> min-db: -12;
+    private property <float> max-db: 12;
+    private property <float> drag-anchor-value: 0;
+    private property <length> drag-anchor-y: 0px;
+
+    private property <length> centre-y: root.track-height / 2;
+    private property <length> handle-y: root.track-height * (root.max-db - root.value) / (root.max-db - root.min-db);
+
+    width: 28px;
+    height: root.track-height;
+
+    function clamp-db(v: float) -> float {
+        return max(root.min-db, min(root.max-db, v));
+    }
+
+    function snap-db(v: float) -> float {
+        return round(v * 10.0) / 10.0;
+    }
+
+    // Track.
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        width: 4px;
+        height: parent.height;
+        border-radius: 2px;
+        background: Theme.card-border;
+    }
+
+    // Fill between the 0 dB centre line and the handle.
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        width: 4px;
+        y: min(root.handle-y, root.centre-y);
+        height: max(root.handle-y, root.centre-y) - min(root.handle-y, root.centre-y);
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+
+    // Handle.
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: root.handle-y - self.height / 2;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        border-width: 2px;
+        border-color: fs.has-focus ? Theme.accent : Theme.card-border;
+        background: (touch.pressed || touch.has-hover) ? #ffffff : Theme.text;
+        animate background { duration: 80ms; }
+    }
+
+    fs := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == Key.UpArrow) {
+                root.value-edited(root.clamp-db(root.value + 0.5));
+                return accept;
+            }
+            if (event.text == Key.DownArrow) {
+                root.value-edited(root.clamp-db(root.value - 0.5));
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                fs.focus();
+                root.drag-anchor-y = self.mouse-y;
+                root.drag-anchor-value = root.value;
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                // Measure from the press point so the handle does not jump to the cursor.
+                let delta = self.mouse-y - root.drag-anchor-y;
+                let raw = root.drag-anchor-value - delta / root.track-height * (root.max-db - root.min-db);
+                root.value-edited(root.snap-db(root.clamp-db(raw)));
+            }
+        }
+        double-clicked => {
+            root.value-edited(0.0);
+        }
+        scroll-event(event) => {
+            // Wheel up raises the gain, as in most sliders.
+            if (event.delta-y > 0) {
+                root.value-edited(root.clamp-db(root.value + 0.5));
+                return accept;
+            }
+            if (event.delta-y < 0) {
+                root.value-edited(root.clamp-db(root.value - 0.5));
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+// Equaliser card: header with the preset bar, the response plot with the dB grid, ten band
+// sliders, value labels and frequency labels.
+export component EqCard inherits Rectangle {
+    in property <[float]> gains;
+    in property <[string]> gain-labels;
+    // Fractions (0 at 32 Hz, 1 at 16 kHz) of each band on the log axis.
+    in property <[float]> band-positions;
+    // SVG path strings computed by the Rust side for the viewbox below. The viewbox is the
+    // curve area in logical pixels, so the curve is drawn 1:1 at any plot width.
+    in property <string> curve-fill;
+    in property <string> curve-line;
+    in property <float> curve-viewbox-width: 1000;
+    in property <float> curve-viewbox-height: 180;
+    // Reports the size of the curve area (logical px) whenever it changes.
+    callback curve-resized(float, float);
+    in property <bool> power-on: false;
+    in property <string> preset-label;
+    in property <bool> preset-modified: false;
+    in property <[PresetRowItem]> preset-rows;
+    in property <bool> can-save: false;
+    in property <bool> can-rename: false;
+    in property <bool> can-delete: false;
+    callback gain-changed(int, float);
+    callback preset-selected(string);
+    callback preset-save();
+    callback preset-save-as();
+    callback preset-rename();
+    callback preset-delete();
+
+    // Plot geometry: value labels above the track, frequency labels below it.
+    private property <length> track-top: 24px;
+    private property <length> track-height: 180px;
+    // Horizontal inset of the curve area and of the band columns, so that the edge sliders and
+    // their labels are not clipped. The curve spans exactly the first to the last band.
+    private property <length> plot-inset: 30px;
+    private property <[float]> grid-db: [12, 6, 0, -6, -12];
+    private property <[string]> grid-labels: ["+12", "+6", "0", "-6", "-12"];
+    private property <[string]> band-labels: ["32", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
+
+    background: Theme.card;
+    border-radius: Theme.radius-card;
+    border-width: 1px;
+    border-color: Theme.card-border;
+
+    VerticalLayout {
+        padding: Theme.space-m;
+        spacing: Theme.space-s;
+
+        HorizontalLayout {
+            spacing: Theme.space-s;
+
+            Text {
+                text: "Equalizer";
+                color: Theme.text;
+                font-size: Theme.font-title;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            PresetBar {
+                height: 32px;
+                label: root.preset-label;
+                modified: root.preset-modified;
+                rows: root.preset-rows;
+                can-save: root.can-save;
+                can-rename: root.can-rename;
+                can-delete: root.can-delete;
+                selected(name) => {
+                    root.preset-selected(name);
+                }
+                save-clicked => {
+                    root.preset-save();
+                }
+                save-as-clicked => {
+                    root.preset-save-as();
+                }
+                rename-clicked => {
+                    root.preset-rename();
+                }
+                delete-clicked => {
+                    root.preset-delete();
+                }
+            }
+        }
+
+        // The whole body dims while processing is off, but stays editable.
+        body := Rectangle {
+            height: 230px;
+            opacity: root.power-on ? 1.0 : 0.55;
+            animate opacity { duration: Theme.transition; }
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: Theme.space-xs;
+
+                db-column := Rectangle {
+                    width: 36px;
+
+                    for label[i] in root.grid-labels : Text {
+                        x: 0px;
+                        y: root.track-top + root.track-height * (12 - root.grid-db[i]) / 24 - 8px;
+                        width: 32px;
+                        height: 16px;
+                        text: label;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-small;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+
+                plot := Rectangle {
+                    horizontal-stretch: 1;
+
+                    for db in root.grid-db : Rectangle {
+                        x: 0px;
+                        y: root.track-top + root.track-height * (12 - db) / 24;
+                        width: parent.width;
+                        height: 1px;
+                        background: db == 0 ? Theme.text-muted : Theme.card-border;
+                        opacity: db == 0 ? 0.6 : 1.0;
+                    }
+
+                    // Filled area between the response curve and 0 dB, behind the sliders.
+                    // The fill Path also reports its size: the Rust side draws the curve for it.
+                    fill-path := Path {
+                        x: root.plot-inset;
+                        y: root.track-top;
+                        width: parent.width - 2 * root.plot-inset;
+                        height: root.track-height;
+                        viewbox-width: root.curve-viewbox-width;
+                        viewbox-height: root.curve-viewbox-height;
+                        commands: root.curve-fill;
+                        fill: Theme.accent-soft;
+                        stroke: transparent;
+                        init => {
+                            root.curve-resized(self.width / 1px, self.height / 1px);
+                        }
+                        changed width => {
+                            root.curve-resized(self.width / 1px, self.height / 1px);
+                        }
+                        changed height => {
+                            root.curve-resized(self.width / 1px, self.height / 1px);
+                        }
+                    }
+
+                    Path {
+                        x: root.plot-inset;
+                        y: root.track-top;
+                        width: parent.width - 2 * root.plot-inset;
+                        height: root.track-height;
+                        viewbox-width: root.curve-viewbox-width;
+                        viewbox-height: root.curve-viewbox-height;
+                        commands: root.curve-line;
+                        fill: transparent;
+                        stroke: Theme.accent;
+                        stroke-width: 2px;
+                    }
+
+                    for gain[i] in root.gains : VerticalSlider {
+                        x: root.plot-inset + (parent.width - 2 * root.plot-inset) * root.band-positions[i] - 14px;
+                        y: root.track-top;
+                        track-height: root.track-height;
+                        value: gain;
+                        value-edited(v) => {
+                            root.gain-changed(i, v);
+                        }
+                    }
+
+                    for label[i] in root.gain-labels : Text {
+                        x: root.plot-inset + (parent.width - 2 * root.plot-inset) * root.band-positions[i] - 30px;
+                        y: 0px;
+                        width: 60px;
+                        height: root.track-top - 4px;
+                        text: label;
+                        color: Theme.text;
+                        font-size: Theme.font-small;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    for freq[i] in root.band-labels : Text {
+                        x: root.plot-inset + (parent.width - 2 * root.plot-inset) * root.band-positions[i] - 30px;
+                        y: root.track-top + root.track-height + 6px;
+                        width: 60px;
+                        height: 18px;
+                        text: freq;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-small;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

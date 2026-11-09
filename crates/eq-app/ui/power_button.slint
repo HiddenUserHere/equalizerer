@@ -1,0 +1,55 @@
+import { Theme } from "theme.slint";
+
+// Round power toggle. Mouse click, Space and Enter emit `clicked`; the owner decides the new
+// state, so the button only reflects `power-on`.
+export component PowerButton inherits Rectangle {
+    in property <bool> power-on: false;
+    callback clicked();
+
+    width: 56px;
+    height: 56px;
+    border-radius: self.width / 2;
+    border-width: 2px;
+    background: root.power-on
+        ? (touch.pressed ? #2563eb : (touch.has-hover ? #4d8ef7 : Theme.accent))
+        : (touch.pressed ? #262a31 : (touch.has-hover ? #222630 : Theme.card));
+    border-color: fs.has-focus ? Theme.text : (root.power-on ? Theme.accent : Theme.card-border);
+    animate background, border-color { duration: Theme.transition; }
+
+    // Power glyph: an arc open at the top plus a short vertical stroke, on a 24 x 24 grid.
+    Path {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 24px;
+        height: 24px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: "M 6.858 5.872 A 8 8 0 1 0 17.142 5.872 M 12 2.5 L 12 11";
+        fill: transparent;
+        stroke: root.power-on ? Theme.on-accent : Theme.text-muted;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+        animate stroke { duration: Theme.transition; }
+    }
+
+    fs := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+}

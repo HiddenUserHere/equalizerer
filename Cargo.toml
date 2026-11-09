@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/eq-dsp",
+    "crates/eq-engine",
+    "crates/eq-core",
+    "crates/eq-wasapi",
+    "crates/eq-pipewire",
+    "crates/eq-app",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+rust-version = "1.90"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = true
+
+# Benchmarks keep debug info for profilers; `strip = false` is needed because
+# the release profile strips symbols and that setting is inherited.
+[profile.bench]
+inherits = "release"
+debug = true
+strip = false
