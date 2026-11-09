@@ -4,7 +4,7 @@
 //! [`DeviceEvent`]s to the controller, the UI sends [`AppCommand`]s, and the controller answers
 //! with [`AppEvent`]s.
 
-use crate::model::{DeviceId, LatencyMode, RoutingStatus, Stats};
+use crate::model::{DeviceId, DeviceInfo, LatencyMode, RoutingStatus, Stats};
 
 /// Something that happened in the OS or in a pipeline, reported to the controller.
 ///
@@ -52,6 +52,9 @@ pub enum AppCommand {
     DeletePreset(String),
     /// Changes the latency mode, which restarts the pipeline.
     SetLatency(LatencyMode),
+    /// Chooses the real output device to equalize. Ignored for the virtual device and for ids
+    /// the controller does not know.
+    SelectTarget(DeviceId),
     /// Asks the running instance to show its window.
     ShowWindow,
     /// Powers off (restoring the real default) and exits.
@@ -78,6 +81,10 @@ pub struct AppSnapshot {
     pub status: RoutingStatus,
     /// Name of the target output device, if one is selected.
     pub target_name: Option<String>,
+    /// Id of the target output device, if one is selected.
+    pub target_id: Option<DeviceId>,
+    /// The real output devices the user can choose from. The virtual device is never listed.
+    pub devices: Vec<DeviceInfo>,
     /// All presets, built-in first.
     pub presets: Vec<PresetSummary>,
     /// Name of the preset the gains were loaded from, if any.

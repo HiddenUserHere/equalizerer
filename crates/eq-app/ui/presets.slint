@@ -46,23 +46,29 @@ component PresetButton inherits Rectangle {
     }
 }
 
-// Preset dropdown: a rounded control showing the active preset (or "Custom") and a popup list
-// grouped into "Built-in" and "My presets". Clicking a preset selects it and closes the list.
-component PresetSelector inherits Rectangle {
+// Dropdown: a rounded control showing the current choice and a popup list of rows. Used for the
+// preset list (grouped into "Built-in" and "My presets") and for the output device list.
+// Clicking a row reports it through `selected(name)` (by name) and `picked(index)` (by position)
+// and closes the list. A disabled dropdown stays visible but cannot be opened.
+export component Dropdown inherits Rectangle {
     in property <string> label;
     in property <bool> modified: false;
     in property <[PresetRowItem]> rows;
+    in property <bool> enabled: true;
+    in property <length> selector-width: 200px;
     callback selected(string);
+    callback picked(int);
 
     // One line per row, capped so that a long list scrolls inside the popup.
     private property <length> list-height: min(320px, root.rows.length * 28px + 8px);
 
-    width: 200px;
+    width: root.selector-width;
     height: 32px;
     border-radius: Theme.radius-control;
     border-width: 1px;
     border-color: popup.is-open ? Theme.accent : Theme.card-border;
     background: touch.has-hover ? #222630 : Theme.background;
+    opacity: root.enabled ? 1.0 : 0.45;
     animate background, border-color { duration: Theme.transition; }
 
     HorizontalLayout {
@@ -109,6 +115,7 @@ component PresetSelector inherits Rectangle {
     touch := TouchArea {
         width: parent.width;
         height: parent.height;
+        enabled: root.enabled;
         clicked => {
             if (popup.is-open) {
                 popup.close();
@@ -143,7 +150,7 @@ component PresetSelector inherits Rectangle {
                 list := VerticalLayout {
                     width: root.width - 8px;
 
-                    for row in root.rows : Rectangle {
+                    for row[index] in root.rows : Rectangle {
                         height: row.header ? 26px : 28px;
                         border-radius: Theme.radius-control;
                         background: row.active
@@ -168,6 +175,7 @@ component PresetSelector inherits Rectangle {
                             enabled: !row.header;
                             clicked => {
                                 root.selected(row.label);
+                                root.picked(index);
                                 popup.close();
                             }
                         }
@@ -195,7 +203,7 @@ export component PresetBar inherits HorizontalLayout {
 
     spacing: Theme.space-xs;
 
-    PresetSelector {
+    Dropdown {
         label: root.label;
         modified: root.modified;
         rows: root.rows;

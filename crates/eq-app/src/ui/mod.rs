@@ -4,6 +4,7 @@
 //! blocks on the controller's [`AppEvent`] channel and hands each event to the event loop with
 //! `slint::invoke_from_event_loop`. UI callbacks turn user actions into [`AppCommand`]s.
 
+pub mod devices_view;
 pub mod eq_view;
 pub mod latency_view;
 pub mod presets_view;
@@ -14,8 +15,9 @@ use std::cell::RefCell;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use devices_view::DeviceRow;
 use eq_core::{
-    AppCommand, AppEvent, AppSnapshot, LatencyMode, PresetSummary, RoutingStatus, Stats,
+    AppCommand, AppEvent, AppSnapshot, DeviceInfo, LatencyMode, PresetSummary, RoutingStatus, Stats,
 };
 use eq_dsp::Layout;
 use latency_view::UnderrunMonitor;
@@ -75,6 +77,8 @@ struct UiState {
     plot_size: (f32, f32),
     /// Inputs the curve paths on screen were computed from, to skip recomputation.
     curve_drawn: Option<CurveKey>,
+    /// Output devices from the last snapshot. Dropdown entries are looked up here by index.
+    devices: Vec<DeviceInfo>,
     /// Presets from the last snapshot, used to validate dialog names.
     presets: Vec<PresetSummary>,
     /// Active preset from the last snapshot.
@@ -156,6 +160,18 @@ pub fn run_ui(
         // A negative band index cannot come from the UI; ignore it rather than trust it.
         if let Ok(band) = usize::try_from(band) {
             send(&gain_commands, AppCommand::SetGain { band, db });
+        }
+    });
+
+    let device_commands = commands.clone();
+    window.on_device_selected(move |index| {
+        // A negative index cannot come from the UI; ignore it rather than trust it.
+        let Ok(index) = usize::try_from(index) else {
+            return;
+        };
+        let target = UI_STATE.with(|state| devices_view::device_at(&state.borrow().devices, index));
+        if let Some(id) = target {
+            send(&device_commands, AppCommand::SelectTarget(id));
         }
     });
 
@@ -411,6 +427,19 @@ fn apply_snapshot(ui: &AppWindow, snapshot: &AppSnapshot) {
     ui.set_power_on(snapshot.power);
     ui.set_status_text(SharedString::from(view_model::status_text(snapshot)));
     ui.set_status_degraded(view_model::status_is_degraded(snapshot.status));
+
+    let target = snapshot.target_id.as_ref();
+    ui.set_device_rows(model(
+        devices_view::build_rows(&snapshot.devices, target)
+            .into_iter()
+            .map(device_row_item)
+            .collect(),
+    ));
+    ui.set_device_label(SharedString::from(devices_view::selector_label(
+        &snapshot.devices,
+        target,
+    )));
+    ui.set_device_enabled(devices_view::is_enabled(&snapshot.devices));
     if let Some(gains) = sync_model(&ui.get_gains(), snapshot.gains.clone()) {
         ui.set_gains(gains);
     }
@@ -440,6 +469,7 @@ fn apply_snapshot(ui: &AppWindow, snapshot: &AppSnapshot) {
 
     UI_STATE.with(|cell| {
         let mut state = cell.borrow_mut();
+        state.devices.clone_from(&snapshot.devices);
         state.presets.clone_from(&snapshot.presets);
         state.active_preset.clone_from(&snapshot.active_preset);
         state.latency = snapshot.latency;
@@ -590,6 +620,15 @@ fn confirm_dialog(ui: &AppWindow, commands: &Sender<AppCommand>, text: &str) {
 fn close_dialog(ui: &AppWindow) {
     UI_STATE.with(|state| state.borrow_mut().dialog = None);
     ui.set_dialog_kind(PresetDialogKind::None);
+}
+
+/// Converts one output popup row to its Slint form. Device rows never are headings.
+fn device_row_item(row: DeviceRow) -> PresetRowItem {
+    PresetRowItem {
+        header: false,
+        label: SharedString::from(row.name),
+        active: row.active,
+    }
 }
 
 /// Converts one popup row to its Slint form.

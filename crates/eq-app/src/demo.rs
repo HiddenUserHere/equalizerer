@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use eq_core::{
-    AppCommand, AppEvent, AppSnapshot, LatencyMode, PresetSummary, RoutingStatus, Stats,
+    AppCommand, AppEvent, AppSnapshot, DeviceId, DeviceInfo, LatencyMode, PresetSummary,
+    RoutingStatus, Stats,
 };
 use eq_dsp::{GAIN_MAX_DB, GAIN_MIN_DB, Layout};
 
@@ -40,6 +41,10 @@ struct DemoPreset {
 struct DemoState {
     power: bool,
     latency: LatencyMode,
+    /// Fake real outputs, in the order the dropdown lists them.
+    devices: Vec<DeviceInfo>,
+    /// Id of the output the demo "renders" to.
+    target: DeviceId,
     /// Built-in presets first, then user presets sorted case-insensitively.
     presets: Vec<DemoPreset>,
     /// Name of the preset the gains were loaded from.
@@ -64,9 +69,17 @@ impl DemoState {
                 vec![4.0, 3.0, 1.0, -1.0, -2.0, -1.0, 1.0, 3.0, 4.0, 4.0],
             ),
         ];
+        let devices = vec![
+            demo_device("demo-speakers", "Speakers (Demo)"),
+            demo_device("demo-headphones", "Headphones (Demo)"),
+            demo_device("demo-monitor", "Monitor (Demo)"),
+        ];
+        let target = devices[0].id.clone();
         Self {
             power: false,
             latency: LatencyMode::Auto,
+            devices,
+            target,
             presets,
             active: Some("Flat".to_owned()),
             modified: false,
@@ -99,6 +112,7 @@ impl DemoState {
             AppCommand::RenamePreset { from, to } => self.rename(&from, &to)?,
             AppCommand::DeletePreset(name) => self.delete(&name)?,
             AppCommand::SetLatency(mode) => self.latency = mode,
+            AppCommand::SelectTarget(id) => self.select_target(&id)?,
             AppCommand::ShowWindow | AppCommand::Quit => {
                 return Err(format!("Not available in the demo controller: {command:?}"));
             }
@@ -131,7 +145,13 @@ impl DemoState {
             } else {
                 RoutingStatus::Off
             },
-            target_name: Some("Demo output".to_owned()),
+            target_name: self
+                .devices
+                .iter()
+                .find(|device| device.id == self.target)
+                .map(|device| device.name.clone()),
+            target_id: Some(self.target.clone()),
+            devices: self.devices.clone(),
             presets: self.summaries(),
             active_preset: self.active.clone(),
             modified: self.modified,
@@ -152,6 +172,15 @@ impl DemoState {
             underruns: 0,
             resyncs: 0,
         }
+    }
+
+    /// Chooses the output. Only the listed real devices are accepted.
+    fn select_target(&mut self, id: &DeviceId) -> Result<(), String> {
+        if !self.devices.iter().any(|device| device.id == *id) {
+            return Err(format!("No output device \u{201c}{id}\u{201d}."));
+        }
+        self.target.clone_from(id);
+        Ok(())
     }
 
     fn find(&self, name: &str) -> Option<usize> {
@@ -242,6 +271,15 @@ impl DemoState {
             .position(|other| !other.builtin && other.name.to_lowercase() > lowered)
             .unwrap_or(self.presets.len());
         self.presets.insert(position, preset);
+    }
+}
+
+/// A fake real output for the demo device list.
+fn demo_device(id: &str, name: &str) -> DeviceInfo {
+    DeviceInfo {
+        id: DeviceId::new(id),
+        name: name.to_owned(),
+        is_virtual: false,
     }
 }
 

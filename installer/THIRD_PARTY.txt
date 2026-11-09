@@ -1,0 +1,34 @@
+Third-party software installed by the Equalizerer setup
+=========================================================
+
+VB-CABLE virtual audio device
+-----------------------------
+
+What it is
+  VB-CABLE is a virtual audio device driver by VB-Audio Software. It creates a
+  playback device called "CABLE Input" and a recording device called
+  "CABLE Output", which pass audio from one to the other.
+
+Why it is needed
+  Equalizerer makes "CABLE Input" the default output, captures everything apps
+  play into it, applies the equalizer and sends the result to the real device you
+  chose. On Windows, Equalizerer needs VB-CABLE for this virtual device.
+
+Licence and origin
+  VB-CABLE is donationware by VB-Audio Software: https://vb-cable.com
+  Redistribution with this installer, including the silent installation, is
+  permitted under the donationware model with this attribution.
+  VB-CABLE is donationware by VB-Audio Software - https://vb-cable.com - please
+  support the author.
+
+What the setup does with it
+  - If no "CABLE Input" device is present, the setup runs the VB-CABLE installer
+    silently once (VBCABLE_Setup_x64.exe -i -h).
+  - If the setup installed VB-CABLE, the uninstaller asks whether to remove it
+    again (VBCABLE_Setup_x64.exe -u -h). Answer No to keep it.
+
+Windows security prompt
+  Windows may show a "Install this device software?" prompt once while the driver
+  is installed. Approve it to let the virtual device be created. The setup does
+  not suppress this prompt and does not change any driver-signing or certificate
+  settings.

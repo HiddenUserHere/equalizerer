@@ -216,6 +216,7 @@ impl Controller {
     /// powers off (the real device becomes the default again) while keeping the persisted power
     /// state "on". Settings are saved before returning.
     pub fn run(mut self, commands: Receiver<AppCommand>, device_events: Receiver<DeviceEvent>) {
+        self.load_devices();
         self.publish();
         if self.settings.power_on {
             self.power_on();
@@ -259,6 +260,7 @@ impl Controller {
             AppCommand::RenamePreset { from, to } => self.rename_preset(&from, &to),
             AppCommand::DeletePreset(name) => self.delete_preset(&name),
             AppCommand::SetLatency(mode) => self.set_latency(mode),
+            AppCommand::SelectTarget(id) => self.dispatch(RouterInput::UserSelectedTarget(id)),
             // The window belongs to the UI, and `run` handles Quit before it reaches this
             // function, so neither needs work here.
             AppCommand::ShowWindow | AppCommand::Quit => {}
@@ -552,6 +554,16 @@ impl Controller {
         }
     }
 
+    /// Reads the device list at start and tells the router about each device. The router needs
+    /// the outputs before power-on to accept a choice made in the UI while power is off. While
+    /// off, `DeviceAdded` has no effect, so this causes no routing change.
+    fn load_devices(&mut self) {
+        self.refresh_devices();
+        for info in self.devices.clone() {
+            self.dispatch(RouterInput::DeviceAdded(info));
+        }
+    }
+
     /// Sets one band's gain.
     fn set_gain(&mut self, band: usize, db: f32) {
         let mut gains = self.gains.clone();
@@ -744,6 +756,13 @@ impl Controller {
             power: self.settings.power_on,
             status: self.status,
             target_name: self.target_name(),
+            target_id: self.router.target().cloned(),
+            devices: self
+                .devices
+                .iter()
+                .filter(|device| !device.is_virtual)
+                .cloned()
+                .collect(),
             presets: self.presets.list(),
             active_preset: self.active_preset.clone(),
             modified: self.modified,
@@ -1189,6 +1208,65 @@ mod tests {
                 "release",
             ]
         );
+    }
+
+    #[test]
+    fn selecting_a_device_while_on_restarts_on_it() {
+        let mut rig = Rig::start(powered_on_settings(), 0);
+        rig.wait_status(RoutingStatus::On);
+        rig.send(AppCommand::SelectTarget(DeviceId::new("headphones")));
+        let snapshot = rig.wait_snapshot(|snapshot| {
+            snapshot.target_id == Some(DeviceId::new("headphones"))
+                && snapshot.status == RoutingStatus::On
+        });
+        assert_eq!(snapshot.target_name.as_deref(), Some("Headphones"));
+        let names: Vec<&str> = snapshot.devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["Speakers", "Headphones"]);
+        let outcome = rig.finish();
+        assert_eq!(
+            outcome.calls,
+            [
+                "ensure",
+                "set_default:virtual",
+                "start:speakers:Auto",
+                "stop",
+                "start:headphones:Auto",
+                "set_default:virtual",
+                "stop",
+                "set_default:headphones",
+                "release",
+            ]
+        );
+    }
+
+    #[test]
+    fn device_selected_while_off_is_used_at_next_power_on() {
+        let mut rig = Rig::start(
+            Settings {
+                power_on: false,
+                ..Settings::default()
+            },
+            0,
+        );
+        rig.wait_snapshot(|snapshot| snapshot.devices.len() == 2);
+        rig.send(AppCommand::SelectTarget(DeviceId::new("headphones")));
+        rig.wait_snapshot(|snapshot| snapshot.target_id == Some(DeviceId::new("headphones")));
+        rig.send(AppCommand::SetPower(true));
+        rig.wait_status(RoutingStatus::On);
+        let outcome = rig.finish();
+        assert_eq!(
+            outcome.calls,
+            [
+                "ensure",
+                "set_default:virtual",
+                "start:headphones:Auto",
+                "stop",
+                "set_default:headphones",
+                "release",
+            ]
+        );
+        let saved = SettingsStore::new(rig.settings_path.clone()).load();
+        assert_eq!(saved.target_device_id, Some(DeviceId::new("headphones")));
     }
 
     #[test]

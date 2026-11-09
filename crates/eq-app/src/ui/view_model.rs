@@ -34,22 +34,15 @@ pub fn status_text(snapshot: &AppSnapshot) -> String {
     status_text_for(snapshot, cfg!(windows))
 }
 
-/// Status line under the app name. `windows` selects the platform-specific hint for a missing
-/// virtual device (VB-CABLE on Windows, `PipeWire` on Linux).
+/// Status line under the output dropdown. The output itself is shown by the dropdown, so this
+/// line only says whether routing is on, or why it is not. `windows` selects the
+/// platform-specific hint for a missing virtual device (VB-CABLE on Windows, `PipeWire` on
+/// Linux).
 #[must_use]
 pub fn status_text_for(snapshot: &AppSnapshot, windows: bool) -> String {
     match snapshot.status {
-        RoutingStatus::Off => match snapshot.target_name.as_deref() {
-            Some(name) => format!("Off \u{2014} Output: {name}"),
-            None => "Off".to_owned(),
-        },
-        RoutingStatus::On => {
-            let name = snapshot
-                .target_name
-                .as_deref()
-                .unwrap_or("no output device");
-            format!("Output: {name}")
-        }
+        RoutingStatus::Off => "Off".to_owned(),
+        RoutingStatus::On => "On".to_owned(),
         RoutingStatus::Degraded(reason) => degraded_text(reason, windows).to_owned(),
     }
 }
@@ -122,25 +115,12 @@ mod tests {
     }
 
     #[test]
-    fn on_status_names_the_target() {
-        let s = snapshot(RoutingStatus::On, Some("Demo output"));
-        assert_eq!(status_text_for(&s, true), "Output: Demo output");
-        assert_eq!(status_text_for(&s, false), "Output: Demo output");
-    }
-
-    #[test]
-    fn on_status_without_target_says_so() {
-        let s = snapshot(RoutingStatus::On, None);
-        assert_eq!(status_text_for(&s, true), "Output: no output device");
-    }
-
-    #[test]
-    fn off_status_mentions_target_when_known() {
-        let with = snapshot(RoutingStatus::Off, Some("Speakers"));
-        assert_eq!(
-            status_text_for(&with, true),
-            "Off \u{2014} Output: Speakers"
-        );
+    fn on_and_off_status_do_not_repeat_the_output_name() {
+        let on = snapshot(RoutingStatus::On, Some("Demo output"));
+        assert_eq!(status_text_for(&on, true), "On");
+        assert_eq!(status_text_for(&on, false), "On");
+        let off = snapshot(RoutingStatus::Off, Some("Speakers"));
+        assert_eq!(status_text_for(&off, true), "Off");
         let without = snapshot(RoutingStatus::Off, None);
         assert_eq!(status_text_for(&without, true), "Off");
     }

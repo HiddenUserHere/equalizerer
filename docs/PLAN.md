@@ -338,6 +338,9 @@ P1, P3, P4.1–4.4 and P5.1–5.3 touch different crates and can run in parallel
   taskbar; a second launch shows the hidden window; the checkbox toggles the Run value. Linux: no
   tray, the window keeps the ordinary behaviour.
 
+**[x] T-6.8 Output device selector** — `ui/presets.slint` (`Dropdown`), `src/ui/devices_view.rs`, `eq-core` `UserSelectedTarget`
+- Header dropdown lists the real outputs (VB-CABLE endpoints excluded) and sets the target: while on the pipeline moves to it, while off it is used at the next power-on.
+
 ## Phase 7 — QA
 
 **[ ] T-7.1 Scenario checklist** — `docs/testing.md`, run on Windows and on a Linux desktop:
@@ -348,6 +351,11 @@ PipeWire with `systemctl --user restart pipewire` → app recovers or shows the 
 **[ ] T-7.2 Soak test** — 8 h playback in Automatic on each OS; CPU, RAM, underruns, resyncs in
 `docs/perf.md`.
 
+**[~] T-7.3 Installer (Inno Setup + VB-CABLE)** — `scripts/build-installer.ps1` builds
+`installer/output/Equalizerer-Setup-<version>.exe`; the setup installs the app, autostart entry and
+VB-CABLE silently, and the uninstaller restores the default device and offers VB-CABLE removal.
+See [installer.md](installer.md). Install and upgrade verified on a machine that already has VB-CABLE (driver step correctly skipped); still pending: a clean machine without VB-CABLE (driver install path) and the uninstaller.
+
 ---
 
 ## Backlog (not in MVP)
@@ -356,7 +364,6 @@ PipeWire with `systemctl --user restart pipewire` → app recovers or shows the 
 |---|---|
 | 31-band layout | `Layout::ThirtyOne` (ISO third-octave, Q ≈ 4.318) + 10/31 toggle |
 | Pre-amp + auto pre-amp, clip LED, output meter | |
-| Output device list in the app | Select target from the UI |
 | Linux tray icon and XDG autostart | Windows tray and Run key are done (T-6.7); Linux needs a tray (StatusNotifierItem) and an autostart `.desktop` file |
 | AutoEq import / preset export | AutoEq TSV and `GraphicEQ:` text |
 | Windows volume bridge | **Promote to MVP if T-4.5 shows volume keys don't work** |

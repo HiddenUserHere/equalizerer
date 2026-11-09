@@ -43,6 +43,9 @@ pub enum RouterInput {
     PipelineFailed,
     /// A controller-side retry of the pipeline succeeded.
     PipelineRecovered,
+    /// The user picked this real output in the app. While routing, this switches the target like
+    /// a real `DefaultChanged`; otherwise the choice is remembered for the next power-on.
+    UserSelectedTarget(DeviceId),
 }
 
 /// A side effect the controller must perform.
@@ -101,6 +104,11 @@ pub struct Router {
     history: Vec<DeviceId>,
     /// The system default when power was turned on; consumed by `VirtualReady`.
     default_at_power_on: Option<DeviceId>,
+    /// The output the user picked in the app and no later OS default change has replaced.
+    /// `VirtualReady` prefers it over the OS default, so a pick made while power is off is
+    /// used at the next power-on. Cleared when the OS reports a real default or the device
+    /// disappears.
+    explicit_target: Option<DeviceId>,
 }
 
 impl Router {
@@ -117,6 +125,7 @@ impl Router {
             target: persisted_target,
             history: Vec::new(),
             default_at_power_on: None,
+            explicit_target: None,
         }
     }
 
@@ -152,6 +161,7 @@ impl Router {
             RouterInput::DeviceAdded(info) => self.device_added(info),
             RouterInput::PipelineFailed => self.pipeline_failed(),
             RouterInput::PipelineRecovered => self.pipeline_recovered(),
+            RouterInput::UserSelectedTarget(id) => self.user_selected_target(id),
         }
     }
 
@@ -242,6 +252,8 @@ impl Router {
         if self.is_virtual(&id) {
             return Vec::new();
         }
+        // The OS now names the newest choice, so an earlier in-app pick no longer applies.
+        self.explicit_target = None;
         match self.phase {
             Phase::Off | Phase::Degraded(DegradedReason::VirtualMissing) => {
                 self.set_target(Some(id));
@@ -266,6 +278,9 @@ impl Router {
         let was_target = self.target.as_ref() == Some(id);
         self.devices.retain(|device| device.id != *id);
         self.history.retain(|old| old != id);
+        if self.explicit_target.as_ref() == Some(id) {
+            self.explicit_target = None;
+        }
 
         if was_virtual {
             return self.virtual_removed();
@@ -410,9 +425,41 @@ impl Router {
         !self.is_virtual(id) && self.devices.iter().any(|device| device.id == *id)
     }
 
-    /// Chooses the target when power comes on: the default if it is a real device, otherwise
-    /// the fallback order.
+    /// The user picked an output in the app.
+    ///
+    /// While routing, a different device restarts the pipeline on it, exactly like a real
+    /// `DefaultChanged`. Otherwise the device becomes the target and is persisted, and the next
+    /// power-on uses it. The virtual device and unknown ids are ignored.
+    fn user_selected_target(&mut self, id: DeviceId) -> Vec<Effect> {
+        if self.is_virtual(&id) || !self.is_known_real(&id) {
+            return Vec::new();
+        }
+        self.explicit_target = Some(id.clone());
+        if self.target.as_ref() == Some(&id) {
+            return Vec::new();
+        }
+        match self.phase {
+            Phase::On
+            | Phase::Degraded(DegradedReason::NoTarget | DegradedReason::PipelineFailed) => {
+                self.restart_on(id)
+            }
+            Phase::Off | Phase::Ensuring | Phase::Degraded(DegradedReason::VirtualMissing) => {
+                self.set_target(Some(id.clone()));
+                vec![Effect::PersistTarget(id)]
+            }
+        }
+    }
+
+    /// Chooses the target when power comes on: an output the user picked in the app, otherwise
+    /// the default if it is a real device, otherwise the fallback order.
     fn initial_target(&self, virtual_id: &DeviceId) -> Option<DeviceId> {
+        if let Some(chosen) = self
+            .explicit_target
+            .as_ref()
+            .filter(|id| self.is_known_real(id))
+        {
+            return Some(chosen.clone());
+        }
         match &self.default_at_power_on {
             Some(default) if default != virtual_id && !self.is_virtual(default) => {
                 Some(default.clone())
@@ -1008,5 +1055,216 @@ mod tests {
                 .handle(RouterInput::VirtualReady(v()))
                 .contains(&Effect::PersistTarget(id("headphones")))
         );
+    }
+
+    // Row: UserSelectedTarget(id) while On -> same effects as a real DefaultChanged.
+    #[test]
+    fn user_selected_target_while_on_restarts_on_it() {
+        let mut router = started_on(&["speakers", "headphones"], "speakers");
+        assert_eq!(
+            router.handle(RouterInput::UserSelectedTarget(id("headphones"))),
+            vec![
+                Effect::StopPipeline,
+                Effect::StartPipeline {
+                    virtual_id: v(),
+                    target_id: id("headphones"),
+                },
+                Effect::SetDefault(v()),
+                Effect::PersistTarget(id("headphones")),
+                Effect::Status(RoutingStatus::On),
+            ]
+        );
+        assert_eq!(router.target(), Some(&id("headphones")));
+        assert_eq!(router.status(), RoutingStatus::On);
+    }
+
+    // Row: UserSelectedTarget(current target) is a no-op.
+    #[test]
+    fn user_selected_current_target_is_noop() {
+        let mut router = started_on(&["speakers", "headphones"], "speakers");
+        assert_eq!(
+            router.handle(RouterInput::UserSelectedTarget(id("speakers"))),
+            vec![]
+        );
+        assert_eq!(router.target(), Some(&id("speakers")));
+    }
+
+    // Row: UserSelectedTarget(virtual) is ignored.
+    #[test]
+    fn user_selected_virtual_device_is_ignored() {
+        let mut router = started_on(&["speakers"], "speakers");
+        assert_eq!(router.handle(RouterInput::UserSelectedTarget(v())), vec![]);
+        assert_eq!(router.target(), Some(&id("speakers")));
+        assert_eq!(router.status(), RoutingStatus::On);
+    }
+
+    // Row: UserSelectedTarget(unknown id) is ignored, while On and while Off.
+    #[test]
+    fn user_selected_unknown_device_is_ignored() {
+        let mut on = started_on(&["speakers"], "speakers");
+        assert_eq!(
+            on.handle(RouterInput::UserSelectedTarget(id("gone"))),
+            vec![]
+        );
+        assert_eq!(on.target(), Some(&id("speakers")));
+
+        let mut off = Router::new(None);
+        assert_eq!(
+            off.handle(RouterInput::UserSelectedTarget(id("gone"))),
+            vec![]
+        );
+        assert_eq!(off.target(), None);
+    }
+
+    // Row: UserSelectedTarget(id) while Off -> remember and persist, no pipeline.
+    #[test]
+    fn user_selected_target_while_off_only_remembers_and_persists() {
+        let mut router = Router::new(None);
+        let _ = router.handle(RouterInput::DeviceAdded(virtual_device()));
+        let _ = router.handle(RouterInput::DeviceAdded(real("speakers")));
+        let _ = router.handle(RouterInput::DeviceAdded(real("headphones")));
+        assert_eq!(
+            router.handle(RouterInput::UserSelectedTarget(id("headphones"))),
+            vec![Effect::PersistTarget(id("headphones"))]
+        );
+        assert_eq!(router.target(), Some(&id("headphones")));
+        assert_eq!(router.status(), RoutingStatus::Off);
+    }
+
+    // A pick made while off wins over the OS default at the next power-on.
+    #[test]
+    fn pick_while_off_is_used_at_next_power_on() {
+        let mut router = Router::new(None);
+        let _ = router.handle(RouterInput::DeviceAdded(virtual_device()));
+        let _ = router.handle(RouterInput::DeviceAdded(real("speakers")));
+        let _ = router.handle(RouterInput::DeviceAdded(real("headphones")));
+        let _ = router.handle(RouterInput::DefaultChanged(id("speakers")));
+        let _ = router.handle(RouterInput::UserSelectedTarget(id("headphones")));
+
+        let _ = router.handle(RouterInput::PowerOn {
+            current_default: Some(id("speakers")),
+            devices: devices_with(&["speakers", "headphones"]),
+        });
+        assert_eq!(
+            router.handle(RouterInput::VirtualReady(v())),
+            vec![
+                Effect::SetDefault(v()),
+                Effect::StartPipeline {
+                    virtual_id: v(),
+                    target_id: id("headphones"),
+                },
+                Effect::PersistTarget(id("headphones")),
+                Effect::Status(RoutingStatus::On),
+            ]
+        );
+    }
+
+    // A pick made during power-on is used for the target as well.
+    #[test]
+    fn pick_during_ensure_is_used_for_target() {
+        let mut router = Router::new(None);
+        let _ = router.handle(RouterInput::PowerOn {
+            current_default: Some(id("speakers")),
+            devices: devices_with(&["speakers", "headphones"]),
+        });
+        assert_eq!(
+            router.handle(RouterInput::UserSelectedTarget(id("headphones"))),
+            vec![Effect::PersistTarget(id("headphones"))]
+        );
+        assert!(
+            router
+                .handle(RouterInput::VirtualReady(v()))
+                .contains(&Effect::StartPipeline {
+                    virtual_id: v(),
+                    target_id: id("headphones"),
+                })
+        );
+    }
+
+    // A later OS default change replaces an earlier in-app pick.
+    #[test]
+    fn os_default_change_after_pick_replaces_it() {
+        let mut router = Router::new(None);
+        let _ = router.handle(RouterInput::DeviceAdded(virtual_device()));
+        let _ = router.handle(RouterInput::DeviceAdded(real("speakers")));
+        let _ = router.handle(RouterInput::DeviceAdded(real("headphones")));
+        let _ = router.handle(RouterInput::UserSelectedTarget(id("headphones")));
+        let _ = router.handle(RouterInput::DefaultChanged(id("speakers")));
+        assert_eq!(router.target(), Some(&id("speakers")));
+
+        let _ = router.handle(RouterInput::PowerOn {
+            current_default: Some(id("speakers")),
+            devices: devices_with(&["speakers", "headphones"]),
+        });
+        assert!(
+            router
+                .handle(RouterInput::VirtualReady(v()))
+                .contains(&Effect::PersistTarget(id("speakers")))
+        );
+    }
+
+    // A removed pick is forgotten, so the next power-on falls back to the OS default.
+    #[test]
+    fn removed_pick_is_forgotten() {
+        let mut router = Router::new(None);
+        let _ = router.handle(RouterInput::DeviceAdded(virtual_device()));
+        let _ = router.handle(RouterInput::DeviceAdded(real("speakers")));
+        let _ = router.handle(RouterInput::DeviceAdded(real("headphones")));
+        let _ = router.handle(RouterInput::UserSelectedTarget(id("headphones")));
+        let _ = router.handle(RouterInput::DeviceRemoved(id("headphones")));
+
+        let _ = router.handle(RouterInput::PowerOn {
+            current_default: Some(id("speakers")),
+            devices: devices_with(&["speakers"]),
+        });
+        assert!(
+            router
+                .handle(RouterInput::VirtualReady(v()))
+                .contains(&Effect::StartPipeline {
+                    virtual_id: v(),
+                    target_id: id("speakers"),
+                })
+        );
+    }
+
+    // A pick while the virtual device is missing is remembered for the next power-on.
+    #[test]
+    fn user_selected_target_while_virtual_missing_is_remembered() {
+        let mut router = Router::new(None);
+        let _ = router.handle(RouterInput::PowerOn {
+            current_default: Some(id("speakers")),
+            devices: devices_with(&["speakers", "headphones"]),
+        });
+        let _ = router.handle(RouterInput::VirtualFailed);
+        assert_eq!(
+            router.handle(RouterInput::UserSelectedTarget(id("headphones"))),
+            vec![Effect::PersistTarget(id("headphones"))]
+        );
+        assert_eq!(router.target(), Some(&id("headphones")));
+        assert_eq!(
+            router.status(),
+            RoutingStatus::Degraded(DegradedReason::VirtualMissing)
+        );
+    }
+
+    // Row: UserSelectedTarget(id) after a pipeline failure restarts on the new device.
+    #[test]
+    fn user_selected_target_after_pipeline_failure_restarts_on_it() {
+        let mut router = started_on(&["speakers", "headphones"], "speakers");
+        let _ = router.handle(RouterInput::PipelineFailed);
+        assert_eq!(
+            router.handle(RouterInput::UserSelectedTarget(id("headphones"))),
+            vec![
+                Effect::StopPipeline,
+                Effect::StartPipeline {
+                    virtual_id: v(),
+                    target_id: id("headphones"),
+                },
+                Effect::SetDefault(v()),
+                Effect::PersistTarget(id("headphones")),
+                Effect::Status(RoutingStatus::On),
+            ]
+        );
+        assert_eq!(router.status(), RoutingStatus::On);
     }
 }

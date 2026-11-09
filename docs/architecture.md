@@ -27,7 +27,8 @@ The same routing trick on both platforms; only the OS plumbing differs.
 
 - **Target device:** the real output the user wants to hear. When the user picks another output
   in the OS (Windows sound flyout; GNOME/KDE sound settings or `wpctl set-default`), that device
-  becomes the new target and the virtual device is made default again.
+  becomes the new target and the virtual device is made default again. The user can also pick
+  the target in the app's output dropdown (§10, §7 `UserSelectedTarget`).
 - **Power off** stops processing and makes the target the default again.
 - Linux support targets **PipeWire** (default on Fedora, Ubuntu ≥ 22.10, Debian 12, Arch, …).
   PulseAudio-only systems are backlog.
@@ -179,12 +180,13 @@ States: `Off`, `On { virtual_id, target_id }`, `Degraded { reason }`
 
 | Input | Effects |
 |---|---|
-| `PowerOn` | `EnsureVirtual` (Windows: locate; Linux: create sink) → target = current default if not virtual, else persisted target → `SetDefault(virtual)` → `StartPipeline(virtual, target)` |
+| `PowerOn` | `EnsureVirtual` (Windows: locate; Linux: create sink) → target = the output picked in the app if still present, else current default if not virtual, else persisted target → `SetDefault(virtual)` → `StartPipeline(virtual, target)` |
 | `DefaultChanged(id)`, id ≠ virtual, while On | target = id → `StopPipeline` → `StartPipeline(virtual, id)` → `SetDefault(virtual)` → persist target |
 | `DefaultChanged(virtual)` | ignored (our own change) |
 | `DeviceRemoved(target)` while On | target = previous target or first active non-virtual device → restart; `NoTarget` if none |
 | `DeviceRemoved(virtual)` | `StopPipeline`, `Degraded(VirtualMissing)` |
 | `PowerOff` | `StopPipeline` → `SetDefault(target)` → `ReleaseVirtual` (Linux: destroy sink; Windows: no-op) |
+| `UserSelectedTarget(id)` (output dropdown; `id` must be a known real device, virtual or unknown ids are ignored) | While On, or Degraded `NoTarget`/`PipelineFailed`: same as `DefaultChanged(id)` → `StopPipeline` (if running) → `StartPipeline(virtual, id)` → `SetDefault(virtual)` → persist → `Status(On)`; the current target is a no-op. While Off, Ensuring or `VirtualMissing`: target = id → persist. The pick is also preferred over the OS default at the next `PowerOn`, until the OS reports a real default or the device disappears. The pick is kept for this session only; after a restart the OS default decides again |
 | App quit | same as `PowerOff`, but the persisted power state stays "on" |
 
 - The controller debounces `DefaultChanged` by 150 ms (Windows sends one per role).
@@ -224,7 +226,10 @@ Slint runs natively on both platforms (winit; Windows, X11 and Wayland). Dark th
 spirit of the reference screenshots. Font: Segoe UI Variable on Windows, Inter (bundled) on
 Linux. MVP window, top to bottom:
 
-1. **Header:** app name, **power button**, status line ("Output: LG ULTRAWIDE" /
+1. **Header:** app name, the **output dropdown** (muted label "Output" and a dropdown styled like
+   the preset selector; it lists the real outputs, never the virtual device, and marks the target;
+   it works with power off too; with no output it is disabled and reads "No output devices"),
+   **power button**, and a status line under the dropdown ("On", "Off", or a warning such as
    "Virtual device not found — install VB-CABLE" on Windows / "PipeWire not running" on Linux).
 2. **Equalizer card:** preset dropdown (Built-in / My presets, "modified" marker, Save,
    Save as, Rename, Delete), 10 vertical sliders with value labels, filled response curve,

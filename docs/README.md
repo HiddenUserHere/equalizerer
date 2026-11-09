@@ -4,6 +4,7 @@
 |---|---|
 | [architecture.md](architecture.md) | Cross-platform architecture (Windows/WASAPI, Linux/PipeWire), threads, audio pipeline, latency system, DSP, routing state machine, presets, settings, UI, performance budget |
 | [PLAN.md](PLAN.md) | MVP task list with acceptance criteria, execution order, and the backlog |
+| [installer.md](installer.md) | Windows installer: build script, Inno Setup steps, silent VB-CABLE install, uninstall, licensing |
 
 Created as tasks complete:
 

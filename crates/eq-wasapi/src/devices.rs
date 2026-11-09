@@ -104,15 +104,23 @@ impl EndpointDirectory for MmDirectory {
     }
 }
 
-/// Marks the first device whose name matches `locator` as virtual and leaves the others unmarked.
+/// Marks as virtual the device that `locator` finds (the endpoint the app routes into) and every
+/// other endpoint of a VB-CABLE installation.
 ///
-/// Only one device is marked, because the locator returns the first match and the controller
-/// routes into exactly one device.
+/// VB-CABLE also exposes endpoints such as `CABLE In 16ch (VB-Audio Virtual Cable)`. Those are
+/// not outputs for the user to pick, so they are flagged by name. The locator still chooses one
+/// endpoint for the pipeline, as before. Names are compared ignoring case.
 pub(crate) fn mark_virtual(devices: &mut [DeviceInfo], locator: &PatternLocator) {
-    let virtual_id = locator.locate(devices).map(|device| device.id.clone());
+    let located = locator.locate(devices).map(|device| device.id.clone());
     for device in devices {
-        device.is_virtual = virtual_id.as_ref() == Some(&device.id);
+        device.is_virtual =
+            located.as_ref() == Some(&device.id) || is_vb_cable_endpoint(&device.name);
     }
+}
+
+/// Whether an endpoint name belongs to a VB-CABLE installation (`VB-Audio` in the name).
+fn is_vb_cable_endpoint(name: &str) -> bool {
+    name.to_lowercase().contains("vb-audio")
 }
 
 /// Reads the endpoint id of `device`.
@@ -152,15 +160,40 @@ mod tests {
     }
 
     #[test]
-    fn marks_only_the_first_match_as_virtual() {
+    fn marks_the_located_endpoint_and_every_vb_audio_endpoint() {
         let mut devices = vec![
             device("{speakers}", "Speakers (Realtek Audio)"),
+            device("{cable-in}", "CABLE Input (VB-Audio Virtual Cable)"),
+            device("{cable-in-16}", "CABLE In 16ch (VB-Audio Virtual Cable)"),
+            device("{headphones}", "Headphones (USB)"),
+        ];
+        mark_virtual(&mut devices, &PatternLocator::default());
+        let flags: Vec<bool> = devices.iter().map(|d| d.is_virtual).collect();
+        assert_eq!(flags, [false, true, true, false]);
+    }
+
+    #[test]
+    fn marks_only_one_locator_match_when_several_names_match() {
+        let mut devices = vec![
             device("{cable-in}", "CABLE Input (VB-Audio Virtual Cable)"),
             device("{cable-in-2}", "CABLE Input (second)"),
         ];
         mark_virtual(&mut devices, &PatternLocator::default());
         let flags: Vec<bool> = devices.iter().map(|d| d.is_virtual).collect();
-        assert_eq!(flags, [false, true, false]);
+        assert_eq!(flags, [true, false]);
+        assert_eq!(
+            PatternLocator::default()
+                .locate(&devices)
+                .map(|d| d.id.as_str()),
+            Some("{cable-in}")
+        );
+    }
+
+    #[test]
+    fn vb_audio_name_is_matched_ignoring_case() {
+        let mut devices = vec![device("{x}", "Line (vb-audio point)")];
+        mark_virtual(&mut devices, &PatternLocator::new("nothing"));
+        assert!(devices[0].is_virtual);
     }
 
     #[test]
